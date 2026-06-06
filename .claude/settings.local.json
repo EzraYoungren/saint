@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkg-config --libs cblas)",
+      "Bash(pkg-config --libs blas)",
+      "Read(//usr/**)",
+      "Bash(make *)"
+    ]
+  }
+}
