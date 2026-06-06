@@ -42,93 +42,11 @@ int m = 8;
 int n = 8;
 int k = 8;
 
-typedef struct {
-  Value *data;
+typedef struct  {
+  float *data;
   int x;
   int y;
 } Vector;
-
-typedef struct {
-  float data;
-  float grad;
-  Value *child1;
-  Value *child2;
-  float local_grad1;
-  float local_grad2;
-} Value;
-
-Value add_value(Value *a, Value *b) {
-    Value c = {};
-    c.data = a->data + b->data;
-    c.child1 = a;
-    c.child2 = b;
-    c.local_grad1 = 1;
-    c.local_grad2 = 1;
-    return c;
-}
-Value mul_value(Value *a, Value *b) {
-    Value c = {};
-    c.data = a->data * b->data;
-    c.child1 = a;
-    c.child2 = b;
-    c.local_grad1 = b->data;
-    c.local_grad2 = a->data;
-    return c;
-}
-Value mul_value_const(Value *a, float b) {
-  return mul_value(a, &init_val(b));
-}
-Value add_value_const(Value *a, float b) {
-  return add_value(a, &init_val(b));
-}
-Value pow_value(Value *a, float b) {
-    Value c = {};
-    c.data = pow(a->data, b);
-    c.child1 = a;
-    c.local_grad1 = b * pow(a->data, b - 1);
-    return c;
-}
-Value log_value(Value *a) {
-    Value c = {};
-    c.data = log(a->data);
-    c.child1 = a;
-    c.local_grad1 = 1 / self.data;
-    return c;
-}
-Value exp_value(Value *a) {
-    Value c = {};
-    c.data = exp(a->data);
-    c.child1 = a;
-    c.local_grad1 = c->data;
-    return c;
-}
-Value relu_value(Value *a) {
-    Value c = {};
-    c.data = relu(a->data);
-    c.child1 = a;
-    c.local_grad1 = a->data > 0.0 ? 1.0 : 0.0;
-    return c;
-}
-Value neg_value(Value *a) {
-    return mul_value_const(a, -1.0)
-}
-Value sub_value(Value *a, Value *b) {
-    return add_value(a, &neg_value(b))
-}
-Value sub_value_const(Value *a, float b) {
-    return add_value_const(a, -b)
-}
-Value div_value(Value *a, Value *b) {
-    return mul_value(a, &pow_value(b, -1))
-}
-Value div_value_const(Value *a, float b) {
-    return mul_value(a, pow(b, -1))
-}
-
-Value init_value(float data) {
-    Value val = { data };
-    return val;
-}
 
 typedef struct {
   Vector attn_wq;
@@ -141,7 +59,7 @@ typedef struct {
 
 void randomize_vector(Vector *vector) {
   for (int i = 0; i < vector->x * vector->y; i++) {
-    vector->data[i] = init_value(randn() * 0.1);
+    vector->data[i] = randn() * 0.1;
   }
 }
 
@@ -150,26 +68,10 @@ float relu(float x) {
 }
 
 Vector create_vector(int x, int y) {
-  float *data = calloc(x * y, sizeof(Value));
+  float *data = calloc(x * y, sizeof(float));
   Vector vector = {data, x, y};
   randomize_vector(&vector);
   return vector;
-}
-
-Vector create_vector_no_rand(int x, int y) {
-  float *data = calloc(x * y, sizeof(Value));
-  Vector vector = {data, x, y};
-  return vector;
-}
-
-Vector linear_value(Value *input, int xsize, Vector *vector) {
-    Vector res = create_vector_no_rand(vector->x, 1)
-    for (int x = 0; x < vector->x, x++) {
-        for (int y = 0; y < vector->y, y++) {
-            vector->data[x] += vector->data[x + y*vector->x].data * input[y]
-        }
-    }
-    return res;
 }
 
 Vector linear(float *x, int xsize, Vector *vector, bool freex) {
@@ -399,6 +301,8 @@ int main() {
         loss /= n;
         printf("loss: %f\n", loss);
 
+        // Backwards pass
+        
         for (int i = 0; i < N_LAYER * n; i++) {
             free(keys[i].data);
             free(values[i].data);
