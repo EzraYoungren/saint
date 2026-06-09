@@ -172,31 +172,31 @@ Vector linear_value(Value *input, int xsize, Vector *vector) {
     return res;
 }
 
-Vector linear(float *x, int xsize, Vector *vector, bool freex) {
-  Vector C = create_vector(vector->x, 1);
-  cblas_sgemm(
-    CblasRowMajor, CblasNoTrans, CblasNoTrans,
-    1, vector->x, xsize,
-    1.0,        // alpha
-    x, xsize,       // A and its leading dimension
-    vector->data, vector->x,       // B and its leading dimension
-    0.0,        // beta
-    C.data, vector->x        // C and its leading dimension
-  );
-  if (freex) free(x);
+// Vector linear(float *x, int xsize, Vector *vector, bool freex) {
+//   Vector C = create_vector(vector->x, 1);
+//   cblas_sgemm(
+//     CblasRowMajor, CblasNoTrans, CblasNoTrans,
+//     1, vector->x, xsize,
+//     1.0,        // alpha
+//     x, xsize,       // A and its leading dimension
+//     vector->data, vector->x,       // B and its leading dimension
+//     0.0,        // beta
+//     C.data, vector->x        // C and its leading dimension
+//   );
+//   if (freex) free(x);
+//
+//   return C;
+// }
 
-  return C;
-}
-
-void rnsnorm(float *x, int size) {
-    float ms = 0;
+void rnsnorm(Value *x, int size) {
+    Value ms = init_value(0);
     for (int i = 0; i < size; i++)
-        ms += x[i] * x[i];
-    ms /= size;
-    float scale = powf(ms + 1e-5, -0.5);
-    printf("scale: %f\n", scale);
+        ms = add_value(ms, mul_value(x[i].data, x[i].data));
+    ms = div_value_const(ms, size);
+    Value scale = pow_value(add_value_const(ms, 1e-5), -0.5);
+    printf("scale: %f\n", scale.data);
     for (int i = 0; i < size; i++)
-        x[i] *= scale;
+        x[i] = mul_value(x[i], scale);
 }
 
 void softmax(float *logits, int size) {
@@ -214,6 +214,20 @@ void softmax(float *logits, int size) {
         logits[i] /= sum;
 }
 
+// typedef struct {
+//   int *val;
+// } Pointer;
+//
+//
+// int main() {
+//   int val = 1;
+//   Pointer pointer = {};
+//   pointer.val = &val;
+//   val = 2;
+//   printf("%i", *pointer.val);
+//   return 0;
+// }
+//
 int main() {
     char **docs = malloc(MAX_LINES * sizeof(char *));
     int *doc_lengths = malloc(MAX_LINES * sizeof(int));
@@ -295,12 +309,12 @@ int main() {
           tokens[i + 1] = char_to_id[(unsigned char)doc[i]];
         }
         tokens[doc_length + 1] = BOS;
-        
+
         int n = MIN(BLOCK_SIZE, doc_length + 1);
         Vector *keys = malloc(N_LAYER * n * sizeof(Vector));
         Vector *values = malloc(N_LAYER * n * sizeof(Vector));
         int *kv_sizes = calloc(N_LAYER, sizeof(int));
-        
+
         float *losses = malloc(n * sizeof(Vector));
         // GPT
         for (int pos_id = 0; pos_id < n; pos_id++) {
@@ -327,7 +341,7 @@ int main() {
                 values[li*n + pos_id] = v;
                 kv_sizes[li]++;
                 float *x_attn = calloc(N_EMBD, sizeof(float));
-          
+
                 for (int h = 0; h < N_HEAD; h++) {
                     int hs = h * HEAD_DIM;
                     // k_h = [ki[hs:hs+head_dim] for ki in keys[li]]
