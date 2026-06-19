@@ -18,6 +18,12 @@
 #define HEAD_DIM N_EMBD/N_HEAD
 
 typedef struct {
+    float *data;
+    int x;
+    int y;
+} Vector;
+
+typedef struct {
     float *fx1;
     float *fx2;
     float *fx3;
@@ -35,16 +41,10 @@ typedef struct {
 typedef struct {
   float *x1;
   float *x2;
-  FPLayer[N_STEPS] layers;
-  float *x3;
-  float *x4;
+  FPLayer layers[NUM_STEPS];
+  float *logits;
+  float loss;
 } FP;
-
-typedef struct {
-    float *data;
-    int x;
-    int y;
-} Vector;
 
 typedef struct {
     Vector attn_wq;
@@ -72,7 +72,7 @@ float relu(float x);
 Vector create_vector(int x, int y);
 Vector create_vector_from_float(int x, int y, float *data);
 Vector create_vector_zeros(int x, int y);
-Vector linear(float *x, int xsize, Vector *vector, bool freex);
+Vector linear(float *x, int xsize, Vector *vector);
 Vector linear_t1(float *x, int xsize, Vector *vector, bool freex);
 Vector linear_t2(float *x, int xsize, Vector *vector, bool freex);
 float rnsnorm(float *x, int size, float *out);
