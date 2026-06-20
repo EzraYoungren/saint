@@ -63,43 +63,51 @@ Vector create_vector_zeros(int x, int y) {
   return vector;
 }
 
-Vector linear(float *x, int xsize, Vector *vector) {
-  Vector C = create_vector(vector->x, 1);
+void linear(float *x, int xsize, Vector *y, Vector *out) {
+  out->x = y->x;
+  out->y = 1;
   cblas_sgemm(
     CblasRowMajor, CblasNoTrans, CblasNoTrans,
-    1, vector->x, xsize,
+    1, y->x, xsize,
     1.0,        // alpha
     x, xsize,       // A and its leading dimension
-    vector->data, vector->x,       // B and its leading dimension
+    y->data, y->x,       // B and its leading dimension
     0.0,        // beta
-    C.data, vector->x        // C and its leading dimension
+    out->data, y->x        // C and its leading dimension
   );
-
-  return C;
 }
 
+void linearf(float *x, int xsize, Vector *y, float *out) {
+  cblas_sgemm(
+    CblasRowMajor, CblasNoTrans, CblasNoTrans,
+    1, y->x, xsize,
+    1.0,        // alpha
+    x, xsize,       // A and its leading dimension
+    y->data, y->x,       // B and its leading dimension
+    0.0,        // beta
+    out, y->x        // C and its leading dimension
+  );
+}
+// mank + ind
 // M N K
 // A=M*K
 // B=N*K
 // C=M*N
-Vector linear_t1(float *x, int xsize, Vector *vector, bool freex) {
-  Vector C = create_vector(vector->x, xsize);
+void linear_t1(float *x, int xsize, float *y, int ysize, Vector *out) {
+  out->x = ysize;
+  out->y = xsize;
   cblas_sgemm(
     CblasRowMajor, CblasTrans, CblasNoTrans,
-    xsize, vector->x, 1,
+    xsize, ysize, 1,
     1.0,        // alpha
     x, xsize,       // A and its leading dimension
-    vector->data, vector->x,       // B and its leading dimension
+    y, ysize, // B and its leading dimension
     0.0,        // beta
-    C.data, vector->x        // C and its leading dimension
+    out->data, ysize // C and its leading dimension
   );
-  if (freex) free(x);
-
-  return C;
 }
 
-Vector linear_t2(float *x, int xsize, Vector *vector, bool freex) {
-  Vector C = create_vector(vector->x, 1);
+void linear_t2(float *x, int xsize, Vector *vector, float *out) {
   cblas_sgemm(
     CblasRowMajor, CblasNoTrans, CblasTrans,
     1, vector->x, xsize,
@@ -107,11 +115,8 @@ Vector linear_t2(float *x, int xsize, Vector *vector, bool freex) {
     x, xsize,       // A and its leading dimension
     vector->data, vector->x,       // B and its leading dimension
     0.0,        // beta
-    C.data, vector->x        // C and its leading dimension
+    out, vector->x        // C and its leading dimension
   );
-  if (freex) free(x);
-
-  return C;
 }
 
 float rnsnorm(float *x, int size, float *out) {
@@ -167,6 +172,48 @@ void softmax(float *logits, int size) {
         logits[i] /= sum;
 }
 
+void init_fp(FP *fp, int pos_id, int total_vocab) {
+    fp->x1 = malloc(N_EMBD * sizeof(float));
+    fp->x2 = malloc(N_EMBD * sizeof(float));
+    for (int li = 0; li < N_LAYER; li++) {
+        fp->layers[li].fx1 = malloc(N_EMBD * sizeof(float));
+        fp->layers[li].fx2 = calloc(N_EMBD, sizeof(float));
+        for (int i = 0; i < N_HEAD; i++)
+            fp->layers[li].attn_logits[i] = calloc(pos_id, sizeof(float));
+        fp->layers[li].fx3 = malloc(N_EMBD * sizeof(float));
+        fp->layers[li].fx4 = malloc(N_EMBD * sizeof(float));
+        fp->layers[li].fx5 = malloc(N_EMBD * 4 * sizeof(float));
+        fp->layers[li].fx6 = malloc(N_EMBD * 4 * sizeof(float));
+        fp->layers[li].fx7 = malloc(N_EMBD * sizeof(float));
+        fp->layers[li].fx8 = malloc(N_EMBD * sizeof(float));
+        fp->layers[li].q = create_vector_zeros(N_EMBD, 1);
+        fp->layers[li].k = create_vector_zeros(N_EMBD, 1);
+        fp->layers[li].v = create_vector_zeros(N_EMBD, 1);
+    }
+    fp->logits = malloc(total_vocab * sizeof(float));
+}
+
+void free_fp(FP *fp) {
+    free(fp->x1);
+    free(fp->x2);
+    for (int li = 0; li < N_LAYER; li++) {
+        free(fp->layers[li].fx1);
+        free(fp->layers[li].fx2);
+        for (int i = 0; i < N_HEAD; i++)
+            free(fp->layers[li].attn_logits[i]);
+        // free(fp->layers[li].fx3);
+        // free(fp->layers[li].fx4);
+        // free(fp->layers[li].fx5);
+        free(fp->layers[li].fx6);
+        // free(fp->layers[li].fx7);
+        free(fp->layers[li].fx8);
+        free(fp->layers[li].q.data);
+        free(fp->layers[li].k.data);
+        free(fp->layers[li].v.data);
+    }
+    // free(fp->logits);
+}
+
 int main() {
     char **docs = malloc(MAX_LINES * sizeof(char *));
     int *doc_lengths = malloc(MAX_LINES * sizeof(int));
@@ -214,7 +261,6 @@ int main() {
 
     Layer *layers = malloc(N_LAYER * sizeof(Layer));
     Layer *dlayers = malloc(N_LAYER * sizeof(Layer));
-    LayerInfo *layer_info = malloc(N_LAYER * sizeof(LayerInfo));
     for (int i = 0; i < N_LAYER; i++) {
         { 
             Vector attn_wq = create_vector(N_EMBD, N_EMBD);
@@ -237,11 +283,6 @@ int main() {
             Layer layer = { attn_wq, attn_wk, attn_wv, attn_wo, attn_fc1, attn_fc2 };
             dlayers[i] = layer;
         }
-
-        layer_info[i].u = malloc(N_EMBD * sizeof(float));
-        layer_info[i].w = malloc(N_EMBD * sizeof(float));
-        layer_info[i].h1 = malloc(N_EMBD * sizeof(float));
-        layer_info[i].h2 = malloc(4 * N_EMBD * sizeof(float));
     }
 
     Vector wte = create_vector(total_vocab, N_EMBD);
@@ -262,40 +303,33 @@ int main() {
         int n = MIN(BLOCK_SIZE, doc_length + 1);
         
         FP *fp = malloc(n * sizeof(FP));
+        FP *dfp = malloc(n * sizeof(FP));
         // GPT
         for (int pos_id = 0; pos_id < n; pos_id++) {
+            init_fp(&fp[pos_id], pos_id, total_vocab);
+            init_fp(&dfp[pos_id], pos_id, total_vocab);
             int token_id = tokens[pos_id];
             int target_id = tokens[pos_id + 1];
-            fp[pos_id].x1 = malloc(N_EMBD * sizeof(float));
             for (int i = 0; i < N_EMBD; i++) {
                 fp[pos_id].x1[i] = wte.data[token_id + (wte.x*i)] + wpe.data[pos_id + wpe.x*i];
             }
-            fp[pos_id].x2 = malloc(N_EMBD * sizeof(float));
             rnsnorm(fp[pos_id].x1, N_EMBD, fp[pos_id].x2);
 
             for (int li = 0; li < N_LAYER; li++) {
                 float *x = li == 0 ? fp[pos_id].x2 : fp[pos_id].layers[li - 1].fx8;
-                fp[pos_id].layers[li].fx1 = malloc(N_EMBD * sizeof(float));
                 rnsnorm(x, N_EMBD, fp[pos_id].layers[li].fx1);
 
                 // Attention
-                fp[pos_id].layers[li].q = linear(x, N_EMBD, &layers[li].attn_wq);
-                fp[pos_id].layers[li].k = linear(x, N_EMBD, &layers[li].attn_wk);
-                fp[pos_id].layers[li].v = linear(x, N_EMBD, &layers[li].attn_wv);
-                // keys[li*n + pos_id] = k;
-                // values[li*n + pos_id] = v;
-                // kv_sizes[li]++;
-                fp[pos_id].layers[li].fx2 = calloc(N_EMBD, sizeof(float));
+                linear(x, N_EMBD, &layers[li].attn_wq, &fp[pos_id].layers[li].q);
+                linear(x, N_EMBD, &layers[li].attn_wk, &fp[pos_id].layers[li].k);
+                linear(x, N_EMBD, &layers[li].attn_wv, &fp[pos_id].layers[li].v);
           
                 for (int h = 0; h < N_HEAD; h++) {
                     int hs = h * HEAD_DIM;
 
-                    float *attn_logits = calloc(pos_id, sizeof(float));
-                    fp[pos_id].layers[li].attn_logits[h] = attn_logits;
+                    float *attn_logits = fp[pos_id].layers[li].attn_logits[h];
                     for (int t = 0; t < pos_id; t++) {
                         for (int j = 0; j < HEAD_DIM; j++) {
-                            // printf("q.data[j + hs]: %f\n", q.data[j + hs]);
-                            // printf("keys[li*n + t].data[j + hs]: %f\n", keys[li*n + t].data[j + hs]);
                             attn_logits[t] += 
                                 fp[pos_id].layers[li].q.data[j + hs] * 
                                 fp[t].layers[li].k.data[j + hs];
@@ -303,7 +337,7 @@ int main() {
                         attn_logits[t] /= pow(HEAD_DIM, 0.5);
                     }
                     softmax(attn_logits, pos_id);
-                    
+
                     for (int j = 0; j < HEAD_DIM; j++) {
                         for (int t = 0; t < pos_id; t++) {
                             fp[pos_id].layers[li].fx2[j + hs] += 
@@ -311,27 +345,22 @@ int main() {
                                 fp[t].layers[li].v.data[j + hs];
                         }
                     }
-                    // free(attn_logits);
-                    // free(head_out);
                 }
-                fp[pos_id].layers[li].fx3 = 
-                    linear(fp[pos_id].layers[li].fx2, N_EMBD, &layers[li].attn_wo).data;
+                linearf(fp[pos_id].layers[li].fx2, N_EMBD, &layers[li].attn_wo, fp[pos_id].layers[li].fx3);
 
-                // x_residual = fx3
                 // MLP
-                fp[pos_id].layers[li].fx4 = malloc(N_EMBD * 4 * sizeof(float));
                 rnsnorm(fp[pos_id].layers[li].fx3, N_EMBD, fp[pos_id].layers[li].fx4);
-                fp[pos_id].layers[li].fx5 = linear(fp[pos_id].layers[li].fx4, N_EMBD, &layers[li].attn_fc1).data;
-                fp[pos_id].layers[li].fx6 = malloc(N_EMBD * 4 * sizeof(float));
+                linearf(fp[pos_id].layers[li].fx4, N_EMBD, &layers[li].attn_fc1, fp[pos_id].layers[li].fx5);
                 for (int i = 0; i < N_EMBD * 4; i++)
                     fp[pos_id].layers[li].fx6[i] = relu(fp[pos_id].layers[li].fx5[i]);
-                fp[pos_id].layers[li].fx7 = linear(fp[pos_id].layers[li].fx6, N_EMBD * 4, &layers[li].attn_fc2).data;
-                fp[pos_id].layers[li].fx8 = malloc(N_EMBD * sizeof(float));
+
+                linearf(fp[pos_id].layers[li].fx6, N_EMBD * 4, &layers[li].attn_fc2, fp[pos_id].layers[li].fx7);
                 for (int i = 0; i < N_EMBD; i++)
-                    fp[pos_id].layers[li].fx8[i] = fp[pos_id].layers[li].fx7[i] + fp[pos_id].layers[li].fx7[i];
+                    fp[pos_id].layers[li].fx8[i] = fp[pos_id].layers[li].fx7[i] + fp[pos_id].layers[li].fx3[i];
             }
 
-            fp[pos_id].logits = linear(fp[pos_id].layers[N_LAYER - 1].fx8, N_EMBD, &lm_head).data;
+            Vector logits_vec = create_vector_from_float(N_EMBD, 1, fp[pos_id].logits);
+            linear(fp[pos_id].layers[N_LAYER - 1].fx8, N_EMBD, &lm_head, &logits_vec);
             softmax(fp[pos_id].logits, total_vocab);
             fp[pos_id].loss = -log(fp[pos_id].logits[target_id]);
         }
@@ -344,64 +373,75 @@ int main() {
         loss /= n;
         printf("loss: %f\n", loss);
 
-        // for (int pos_id = 0; pos_id < n; pos_id++) {
-        //     int token_id = tokens[pos_id];
-        //     int target_id = tokens[pos_id + 1];
-        //     float dloss = 1/n;
-        //     float *dlogits = logits[pos_id].data;
-        //     dlogits[target_id] -= 1;
-        //     for (int i = 0; i < N_EMBD; i++) {
-        //         printf("dlogits[%i]: %f", i, dlogits[i]);
-        //         // dlogits[i] *= dloss;
-        //     }
-        //
-        //     float *dx = dlogits;
-        //     for (int li = 0; li < N_LAYER; li++) {
-        //         float *dx_residual = malloc(N_EMBD * sizeof(float));
-        //         for (int i = 0; i < N_EMBD; i++)
-        //             dx_residual[i] = dx[i];
-        //
-        //         dlayers[li].attn_fc2 = linear_t1(layer_info[li].h2, N_EMBD * 4, &create_vector_from_float(N_EMBD, 1, dx), false);
-        //         dx = linear_t2(dx, N_EMBD, &layers[li].attn_fc2, true).data;
-        //         // Relu
-        //         for (int i = 0; i < N_EMBD * 4; i++)
-        //             dx[i] *= layer_info[li].h2[i] > 0.0f ? 1 : 0;
-        //         }
-        //
-        //         dlayers[li].attn_fc1 = linear_t1(
-        //             layer_info[li].h1, 
-        //             N_EMBD, 
-        //             &create_vector_from_float(N_EMBD * 4, 1, dx), 
-        //             false
-        //         );
-        //         dx = linear_t2(dx, N_EMBD * 4, &layers[li].attn_fc1, true).data;
-        //
-        //         rnsnorm_backward(dx, layer_info[li].w, dx, N_EMBD);
-        //
-        //         for (int i = 0; i < N_EMBD; i++) {
-        //             dx[i] += dx_residual[i];
-        //         }
-        //
-        //         dlayers[li].attn_wo = linear_t1(layer_info[li].u, N_EMBD, &create_vector_from_float(N_EMBD, 1, dx), false);
-        //         dx = linear_t2(dx, N_EMBD, &layers[li].attn_wo, true).data;
-        //         free(dx_residual);
-        //
-        //         for (int h = 0; h < N_HEAD; h++) {
-        //             float *dattn_logits = calloc(kv_sizes[li], sizeof(float));
-        //             int hs = h * HEAD_DIM;
-        //             for (int j = 0; j < HEAD_DIM; j++) {
-        //                 for (int t = 0; t < kv_sizes[li]; t++) {
-        //                     dattn_logits[t] += dx_attn[j + hs];
-        //                     dvalues[li*n + t].data[j + hs] += dx_attn[j + hs];
-        //                 }
-        //             }
-        //             free(dattn_logits);
-        //         }
-        //     }
-        // }
+        for (int pos_id = 0; pos_id < n; pos_id++) {
+            // int token_id = tokens[pos_id];
+            int target_id = tokens[pos_id + 1];
+            // float dloss = 1/n;
+            // TODO: check which dimension vanilla softmax is against
+            dfp[pos_id].logits = fp[pos_id].logits;
+            dfp[pos_id].logits[target_id] -= 1;
+            // for (int i = 0; i < N_EMBD; i++) {
+            //     printf("dlogits[%i]: %f", i, dlogits[i]);
+            // }
+
+            dfp[pos_id].layers[N_LAYER - 1].fx7 = dfp[pos_id].logits;
+            for (int li = N_LAYER - 1; li >= 0; li--) {
+                dfp[pos_id].layers[li].fx7 =
+                    li == N_LAYER - 1 ? dfp[pos_id].logits : dfp[pos_id].layers[li + 1].fx1;
+
+                linear_t1(
+                    fp[pos_id].layers[li].fx6, 
+                    N_EMBD * 4, 
+                    dfp[pos_id].layers[li].fx7,
+                    N_EMBD, 
+                    &dlayers[li].attn_fc2
+                );
+                linear_t2(dfp[pos_id].layers[li].fx7, N_EMBD, &layers[li].attn_fc2, dfp[pos_id].layers[li].fx6);
+
+                // Relu
+                for (int i = 0; i < N_EMBD * 4; i++) {
+                    dfp[pos_id].layers[li].fx5[i] = dfp[pos_id].layers[li].fx6[i] * fp[pos_id].layers[li].fx5[i] > 0.0f ? 1 : 0;
+                }
+
+                linear_t1(
+                    fp[pos_id].layers[li].fx4,
+                    N_EMBD, 
+                    dfp[pos_id].layers[li].fx5,
+                    N_EMBD * 4,
+                    &dlayers[li].attn_fc1
+                );
+                linear_t2(dfp[pos_id].layers[li].fx5, N_EMBD * 4, &layers[li].attn_fc1, dfp[pos_id].layers[li].fx4);
+
+                rnsnorm_backward(dfp[pos_id].layers[li].fx3, fp[pos_id].layers[li].fx3, dfp[pos_id].layers[li].fx4, N_EMBD);
+
+                for (int i = 0; i < N_EMBD; i++) {
+                    dfp[pos_id].layers[li].fx3[i] += dfp[pos_id].layers[li].fx7[i];
+                }
+
+                linear_t1(fp[pos_id].layers[li].fx2, N_EMBD, dfp[pos_id].layers[li].fx3, N_EMBD, &dlayers[li].attn_wo);
+                linear_t2(dfp[pos_id].layers[li].fx3, N_EMBD, &layers[li].attn_wo, dfp[pos_id].layers[li].fx2);
+
+                for (int h = 0; h < N_HEAD; h++) {
+                    float *dattn_logits = dfp[pos_id].layers[li].attn_logits[h];
+                    int hs = h * HEAD_DIM;
+                    for (int j = 0; j < HEAD_DIM; j++) {
+                        for (int t = 0; t < pos_id; t++) {
+                            dattn_logits[t] += dfp[pos_id].layers[li].fx2[j + hs];
+                            dfp[t].layers[li].v.data[j + hs] += dfp[pos_id].layers[li].fx2[j + hs];// d_attn[j + hs];
+                        }
+                    }
+                }
+            }
+        }
 
         // Backwards pass
         free(tokens);
+        for (int pos_id = 0; pos_id < n; pos_id++) {
+            free_fp(&fp[pos_id]);
+            free_fp(&dfp[pos_id]);
+        }
+        // free(fp);
+        // free(dfp);
     }
 
     for (int i = 0; i < N_LAYER; i++) {
@@ -411,8 +451,15 @@ int main() {
         free(layers[i].attn_wo.data);
         free(layers[i].attn_fc1.data);
         free(layers[i].attn_fc2.data);
+        free(dlayers[i].attn_wq.data);
+        free(dlayers[i].attn_wk.data);
+        free(dlayers[i].attn_wv.data);
+        free(dlayers[i].attn_wo.data);
+        free(dlayers[i].attn_fc1.data);
+        free(dlayers[i].attn_fc2.data);
     }
     free(layers);
+    free(dlayers);
 
     free(wte.data);
     free(wpe.data);

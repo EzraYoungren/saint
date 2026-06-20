@@ -41,7 +41,7 @@ typedef struct {
 typedef struct {
   float *x1;
   float *x2;
-  FPLayer layers[NUM_STEPS];
+  FPLayer layers[N_LAYER];
   float *logits;
   float loss;
 } FP;
@@ -72,9 +72,10 @@ float relu(float x);
 Vector create_vector(int x, int y);
 Vector create_vector_from_float(int x, int y, float *data);
 Vector create_vector_zeros(int x, int y);
-Vector linear(float *x, int xsize, Vector *vector);
-Vector linear_t1(float *x, int xsize, Vector *vector, bool freex);
-Vector linear_t2(float *x, int xsize, Vector *vector, bool freex);
+void linear(float *x, int xsize, Vector *y, Vector *out);
+void linearf(float *x, int xsize, Vector *y, float *out);
+void linear_t1(float *x, int xsize, float *y, int ysize, Vector *out);
+void linear_t2(float *x, int xsize, Vector *y, float *out);
 float rnsnorm(float *x, int size, float *out);
 void rnsnorm_backward(float *dx, const float *x, const float *dy, int size);
 void softmax(float *logits, int size);
