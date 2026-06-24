@@ -13,9 +13,13 @@
 #define N_LAYER 4
 #define N_HEAD 4
 #define BLOCK_SIZE 16
-#define NUM_STEPS 1
+#define NUM_STEPS 100000
 #define MIN(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a < _b ? _a : _b; })
 #define HEAD_DIM N_EMBD/N_HEAD
+#define LEARNING_RATE 0.01
+#define BETA1 0.85
+#define BETA2 0.99
+#define EPS_ADAM 1e-8
 
 typedef struct {
     float *data;

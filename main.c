@@ -102,7 +102,8 @@ void linear_t1(float *x, int xsize, float *y, int ysize, Vector *out) {
     1.0,        // alpha
     x, xsize,       // A and its leading dimension
     y, ysize, // B and its leading dimension
-    0.0,        // beta
+    // because this function is predominately used for the weights, we want to accumulate the gradients
+    1.0,        // beta 
     out->data, ysize // C and its leading dimension
   );
 }
@@ -125,7 +126,6 @@ float rnsnorm(float *x, int size, float *out) {
         ms += x[i] * x[i];
     ms /= size;
     float scale = powf(ms + 1e-5, -0.5);
-    printf("scale: %f\n", scale);
     for (int i = 0; i < size; i++)
         out[i] = x[i] * scale;
     return ms;
@@ -172,6 +172,15 @@ void softmax(float *logits, int size) {
         logits[i] /= sum;
 }
 
+// s:  softmax output from the forward pass (length n)
+// g:  upstream gradient dL/ds (length n)
+// dz: result dL/dz (length n)
+void softmax_backward(const float *s, const float *g, float *dz, int n) {
+    float d = cblas_sdot(n, g, 1, s, 1);   // d = g · s
+    for (int i = 0; i < n; i++)
+        dz[i] = s[i] * (g[i] - d);
+}
+
 void init_fp(FP *fp, int pos_id, int total_vocab) {
     fp->x1 = malloc(N_EMBD * sizeof(float));
     fp->x2 = malloc(N_EMBD * sizeof(float));
@@ -193,7 +202,33 @@ void init_fp(FP *fp, int pos_id, int total_vocab) {
     fp->logits = malloc(total_vocab * sizeof(float));
 }
 
+void init_layers_zeros(Layer *layers) {
+    for (int i = 0; i < N_LAYER; i++) {
+        Vector attn_wq = create_vector_zeros(N_EMBD, N_EMBD);
+        Vector attn_wk = create_vector_zeros(N_EMBD, N_EMBD);
+        Vector attn_wv = create_vector_zeros(N_EMBD, N_EMBD);
+        Vector attn_wo = create_vector_zeros(N_EMBD, N_EMBD);
+        Vector attn_fc1 = create_vector_zeros(4 * N_EMBD, N_EMBD);
+        Vector attn_fc2 = create_vector_zeros(N_EMBD, 4 * N_EMBD);
+        Layer layer = { attn_wq, attn_wk, attn_wv, attn_wo, attn_fc1, attn_fc2 };
+        layers[i] = layer;
+    }
+}
+
+void free_layers(Layer *layers) {
+    for (int i = 0; i < N_LAYER; i++) {
+        free(layers[i].attn_wq.data);
+        free(layers[i].attn_wk.data);
+        free(layers[i].attn_wv.data);
+        free(layers[i].attn_wo.data);
+        free(layers[i].attn_fc1.data);
+        free(layers[i].attn_fc2.data);
+    }
+    free(layers);
+}
+
 void free_fp(FP *fp) {
+    // TODO: figure out why we can't free all these
     free(fp->x1);
     free(fp->x2);
     for (int li = 0; li < N_LAYER; li++) {
@@ -212,6 +247,39 @@ void free_fp(FP *fp) {
         free(fp->layers[li].v.data);
     }
     // free(fp->logits);
+}
+
+void adjust_param(Vector *p, Vector *dp, Vector *mp, Vector *vp, float lr_t, int step) {
+    for (int i = 0; i < (p->x * p->y); i++) {
+        mp->data[i] = BETA1 * mp->data[i] + (1 - BETA2) * dp->data[i];
+        vp->data[i] = BETA2 * vp->data[i] + (1 - BETA2) * powf(dp->data[i], 2);
+        float m_hat = mp->data[i] / (1 - powf(BETA1, step + 1));
+        float v_hat = vp->data[i] / (1 - powf(BETA1, step + 1));
+        p->data[i] -= lr_t * m_hat / (pow(v_hat, 0.5) + EPS_ADAM);
+        dp->data[i] = 0;
+    }
+}
+
+void log_vector(Vector *vector, string name) {
+  printf("%s: %i, %i\n", name, vector->x, vector->y)
+  printf("[\n")
+  for (int y = 0; y < vector->y; y++) {
+      printf("  [")
+      for (int x = 0; x < vector->x; x++) {
+          printf("%f, ", vector->data[vector->x * y + x]);
+      }
+      printf("],\n")
+  }
+  printf("]")
+}
+
+void log_floats(float *floats, int size, string name) {
+    printf("%s: %i\n", name, size);
+    printf("  [");
+    for (int i = 0; i < size; i++) {
+        printf("%f, ", floats[i])
+    }
+    printf("]");
 }
 
 int main() {
@@ -252,15 +320,11 @@ int main() {
         char_to_id[(unsigned char)uchars[i]] = i;
     }
 
-    // Then tokenizing a string is O(1) per character:
-    char *word = "hello";
-    for (char *c = word; *c; c++) {
-        int token = char_to_id[(unsigned char)*c];
-        if (token == -1) { /* unknown char */ }
-    }
-
+    // Init Weights
     Layer *layers = malloc(N_LAYER * sizeof(Layer));
     Layer *dlayers = malloc(N_LAYER * sizeof(Layer));
+    Layer *mlayers = malloc(N_LAYER * sizeof(Layer));
+    Layer *vlayers = malloc(N_LAYER * sizeof(Layer));
     for (int i = 0; i < N_LAYER; i++) {
         { 
             Vector attn_wq = create_vector(N_EMBD, N_EMBD);
@@ -272,22 +336,23 @@ int main() {
             Layer layer = { attn_wq, attn_wk, attn_wv, attn_wo, attn_fc1, attn_fc2 };
             layers[i] = layer;
         }
-
-        { 
-            Vector attn_wq = create_vector_zeros(N_EMBD, N_EMBD);
-            Vector attn_wk = create_vector_zeros(N_EMBD, N_EMBD);
-            Vector attn_wv = create_vector_zeros(N_EMBD, N_EMBD);
-            Vector attn_wo = create_vector_zeros(N_EMBD, N_EMBD);
-            Vector attn_fc1 = create_vector_zeros(4 * N_EMBD, N_EMBD);
-            Vector attn_fc2 = create_vector_zeros(N_EMBD, 4 * N_EMBD);
-            Layer layer = { attn_wq, attn_wk, attn_wv, attn_wo, attn_fc1, attn_fc2 };
-            dlayers[i] = layer;
-        }
     }
+    init_layers_zeros(dlayers);
+    init_layers_zeros(mlayers);
+    init_layers_zeros(vlayers);
 
     Vector wte = create_vector(total_vocab, N_EMBD);
     Vector wpe = create_vector(BLOCK_SIZE, N_EMBD);
     Vector lm_head = create_vector(total_vocab, N_EMBD);
+    Vector dwte = create_vector_zeros(total_vocab, N_EMBD);
+    Vector dwpe = create_vector_zeros(BLOCK_SIZE, N_EMBD);
+    Vector dlm_head = create_vector_zeros(total_vocab, N_EMBD);
+    Vector mwte = create_vector_zeros(total_vocab, N_EMBD);
+    Vector mwpe = create_vector_zeros(BLOCK_SIZE, N_EMBD);
+    Vector mlm_head = create_vector_zeros(total_vocab, N_EMBD);
+    Vector vwte = create_vector_zeros(total_vocab, N_EMBD);
+    Vector vwpe = create_vector_zeros(BLOCK_SIZE, N_EMBD);
+    Vector vlm_head = create_vector_zeros(total_vocab, N_EMBD);
 
     for (int s = 0; s < NUM_STEPS; s++) {
         char *doc = docs[s % num_docs];
@@ -320,9 +385,9 @@ int main() {
                 rnsnorm(x, N_EMBD, fp[pos_id].layers[li].fx1);
 
                 // Attention
-                linear(x, N_EMBD, &layers[li].attn_wq, &fp[pos_id].layers[li].q);
-                linear(x, N_EMBD, &layers[li].attn_wk, &fp[pos_id].layers[li].k);
-                linear(x, N_EMBD, &layers[li].attn_wv, &fp[pos_id].layers[li].v);
+                linear(fp[pos_id].layers[li].fx1, N_EMBD, &layers[li].attn_wq, &fp[pos_id].layers[li].q);
+                linear(fp[pos_id].layers[li].fx1, N_EMBD, &layers[li].attn_wk, &fp[pos_id].layers[li].k);
+                linear(fp[pos_id].layers[li].fx1, N_EMBD, &layers[li].attn_wv, &fp[pos_id].layers[li].v);
           
                 for (int h = 0; h < N_HEAD; h++) {
                     int hs = h * HEAD_DIM;
@@ -373,22 +438,16 @@ int main() {
         loss /= n;
         printf("loss: %f\n", loss);
 
+        // Backward Pass
         for (int pos_id = 0; pos_id < n; pos_id++) {
-            // int token_id = tokens[pos_id];
+            int token_id = tokens[pos_id];
             int target_id = tokens[pos_id + 1];
-            // float dloss = 1/n;
-            // TODO: check which dimension vanilla softmax is against
             dfp[pos_id].logits = fp[pos_id].logits;
             dfp[pos_id].logits[target_id] -= 1;
-            // for (int i = 0; i < N_EMBD; i++) {
-            //     printf("dlogits[%i]: %f", i, dlogits[i]);
-            // }
+            linear_t1(fp[pos_id].layers[N_LAYER - 1].fx8, N_EMBD, dfp[pos_id].logits, vocab_size, &dlm_head);
 
             dfp[pos_id].layers[N_LAYER - 1].fx7 = dfp[pos_id].logits;
             for (int li = N_LAYER - 1; li >= 0; li--) {
-                dfp[pos_id].layers[li].fx7 =
-                    li == N_LAYER - 1 ? dfp[pos_id].logits : dfp[pos_id].layers[li + 1].fx1;
-
                 linear_t1(
                     fp[pos_id].layers[li].fx6, 
                     N_EMBD * 4, 
@@ -430,36 +489,63 @@ int main() {
                             dfp[t].layers[li].v.data[j + hs] += dfp[pos_id].layers[li].fx2[j + hs];// d_attn[j + hs];
                         }
                     }
+                    softmax_backward(fp[pos_id].layers[li].attn_logits[h], dattn_logits, dattn_logits, pos_id);
+                    for (int t = 0; t < pos_id; t++) {
+                        for (int j = 0; j < HEAD_DIM; j++) {
+                            dfp[pos_id].layers[li].q.data[j + hs] += dattn_logits[t];
+                            dfp[t].layers[li].v.data[j + hs] += dattn_logits[t];// d_attn[j + hs];
+                        }
+                    }
                 }
+                
+                linear_t1(fp[pos_id].layers[li].fx1, N_EMBD, dfp[pos_id].layers[li].v.data, N_EMBD, &dlayers[li].attn_wv);
+                linear_t1(fp[pos_id].layers[li].fx1, N_EMBD, dfp[pos_id].layers[li].k.data, N_EMBD, &dlayers[li].attn_wk);
+                linear_t1(fp[pos_id].layers[li].fx1, N_EMBD, dfp[pos_id].layers[li].q.data, N_EMBD, &dlayers[li].attn_wq);
+                float *fx1_v = malloc(N_EMBD * sizeof(float));
+                float *fx1_k = malloc(N_EMBD * sizeof(float));
+                float *fx1_q = malloc(N_EMBD * sizeof(float));
+                linear_t2(dfp[pos_id].layers[li].v.data, N_EMBD, &layers[li].attn_wv, fx1_v);
+                linear_t2(dfp[pos_id].layers[li].k.data, N_EMBD, &layers[li].attn_wk, fx1_k);
+                linear_t2(dfp[pos_id].layers[li].q.data, N_EMBD, &layers[li].attn_wq, fx1_q);
+                for (int i = 0; i < N_EMBD; i++)
+                    dfp[pos_id].layers[li].fx1[i] = fx1_v[i] + fx1_k[i] + fx1_q[i];
+                float *x = li == 0 ? dfp[pos_id].x2 : dfp[pos_id].layers[li - 1].fx7;
+                rnsnorm_backward(x, fp[pos_id].layers[li].fx1, dfp[pos_id].layers[li].fx1, N_EMBD);
+            }
+            rnsnorm_backward(dfp[pos_id].x1, fp[pos_id].x2, dfp[pos_id].x2, N_EMBD);
+            for (int i = 0; i < N_EMBD; i++) {
+                dwte.data[token_id + (wte.x*i)] += fp[pos_id].x1[i];
+                dwpe.data[pos_id + (wte.x*i)] += fp[pos_id].x1[i];
             }
         }
 
-        // Backwards pass
-        free(tokens);
-        for (int pos_id = 0; pos_id < n; pos_id++) {
-            free_fp(&fp[pos_id]);
-            free_fp(&dfp[pos_id]);
+        // Adam Optimizer
+        float lr_t = LEARNING_RATE * (1 - s / NUM_STEPS);
+        for (int li = 0; li < N_LAYER; li++) {
+            adjust_param(&layers[li].attn_wq, &dlayers[li].attn_wq, &mlayers[li].attn_wq, &vlayers[li].attn_wq, lr_t, s);
+            adjust_param(&layers[li].attn_wk, &dlayers[li].attn_wk, &mlayers[li].attn_wk, &vlayers[li].attn_wk, lr_t, s);
+            adjust_param(&layers[li].attn_wv, &dlayers[li].attn_wv, &mlayers[li].attn_wv, &vlayers[li].attn_wv, lr_t, s);
+            adjust_param(&layers[li].attn_wo, &dlayers[li].attn_wo, &mlayers[li].attn_wo, &vlayers[li].attn_wo, lr_t, s);
+            adjust_param(&layers[li].attn_fc1, &dlayers[li].attn_fc1, &mlayers[li].attn_fc1, &vlayers[li].attn_fc1, lr_t, s);
+            adjust_param(&layers[li].attn_fc2, &dlayers[li].attn_fc2, &mlayers[li].attn_fc2, &vlayers[li].attn_fc2, lr_t, s);
         }
+        adjust_param(&wte, &dwte, &mwte, &vwte, lr_t, s);
+        adjust_param(&wpe, &dwpe, &mwpe, &vwpe, lr_t, s);
+        adjust_param(&lm_head, &dlm_head, &mlm_head, &vlm_head, lr_t, s);
+
+        free(tokens);
+        // for (int pos_id = 0; pos_id < n; pos_id++) {
+        //     free_fp(&fp[pos_id]);
+        //     free_fp(&dfp[pos_id]);
+        // }
         // free(fp);
         // free(dfp);
     }
 
-    for (int i = 0; i < N_LAYER; i++) {
-        free(layers[i].attn_wq.data);
-        free(layers[i].attn_wk.data);
-        free(layers[i].attn_wv.data);
-        free(layers[i].attn_wo.data);
-        free(layers[i].attn_fc1.data);
-        free(layers[i].attn_fc2.data);
-        free(dlayers[i].attn_wq.data);
-        free(dlayers[i].attn_wk.data);
-        free(dlayers[i].attn_wv.data);
-        free(dlayers[i].attn_wo.data);
-        free(dlayers[i].attn_fc1.data);
-        free(dlayers[i].attn_fc2.data);
-    }
-    free(layers);
-    free(dlayers);
+    free_layers(layers);
+    free_layers(dlayers);
+    free_layers(mlayers);
+    free_layers(vlayers);
 
     free(wte.data);
     free(wpe.data);
@@ -469,5 +555,6 @@ int main() {
         free(docs[i]);
     free(docs);
     free(doc_lengths);
+    printf("Finished %i steps", NUM_STEPS);
     return 0;
 }
