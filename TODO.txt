@@ -1,0 +1,10 @@
+TODO
+
+* figure out why the loss gets worse
+* no double params w/ rnsnorm
+* better logging functions
+* better naming
+* cleanup wte / wpe / lm_head
+* code formatter
+* run valgrind
+
