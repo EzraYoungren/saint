@@ -25,16 +25,6 @@ double randn() {
     return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
 }
 
-void vector_print(const Vector *v) {
-    printf("Vector(%d x %d): [", v->x, v->y);
-    int len = v->x * v->y;
-    for (int i = 0; i < len; i++) {
-        printf("%.4f", v->data[i]);
-        if (i < len - 1) printf(", ");
-    }
-    printf("]\n");
-}
-
 void randomize_vector(Vector *vector) {
   for (int i = 0; i < vector->x * vector->y; i++) {
     vector->data[i] = randn() * 0.1;
@@ -155,7 +145,6 @@ void rnsnorm_backward(
     for (int i = 0; i < size; i++)
         dx[i] += scale * dy[i]
                - (x[i] / size) * scale3 * dot;
->>>>>>> no-value
 }
 
 void softmax(float *logits, int size) {
@@ -173,22 +162,6 @@ void softmax(float *logits, int size) {
         logits[i] /= sum;
 }
 
-<<<<<<< HEAD
-// typedef struct {
-//   int *val;
-// } Pointer;
-//
-//
-// int main() {
-//   int val = 1;
-//   Pointer pointer = {};
-//   pointer.val = &val;
-//   val = 2;
-//   printf("%i", *pointer.val);
-//   return 0;
-// }
-//
-=======
 // s:  softmax output from the forward pass (length n)
 // g:  upstream gradient dL/ds (length n)
 // dz: result dL/dz (length n)
@@ -299,7 +272,6 @@ void log_floats(float *floats, int size, string name) {
     printf("]");
 }
 
->>>>>>> no-value
 int main() {
     char **docs = malloc(MAX_LINES * sizeof(char *));
     int *doc_lengths = malloc(MAX_LINES * sizeof(int));
