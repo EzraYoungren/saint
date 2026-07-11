@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define LOGGING 0 
 #define MAX_LINES 32050
 #define N_EMBD 16
 #define N_LAYER 4
